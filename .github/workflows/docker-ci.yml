@@ -1,5 +1,5 @@
 ---
-name: CI/CD Pipeline with GHCR
+name: Docker CI/CD Pipeline
 
 on:
   push:
@@ -15,42 +15,53 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Test Python code
+      - name: Test Python syntax
         run: |
           cd myapp
-          python -m py_compile app.py && echo "✅ Python syntax OK"
+          python -m py_compile app.py
+          echo "✅ Python syntax OK"
 
-      - name: Verify requirements
+      - name: Verify dependencies
         run: |
           cd myapp
           pip install -r requirements.txt
-          python -c "import flask; print(f'✅ Flask {flask.__version__} installed')"
+          python -c "import flask; print('✅ Flask installed')"
 
   build:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'  # Только для push, не для PR
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Build Docker image locally
+      - name: Build Docker image
         run: |
           cd myapp
           docker build -t myapp:${{ github.sha }} .
-          echo "✅ Image built locally: myapp:${{ github.sha }}"
+          echo "✅ Docker image built"
 
-      - name: Test Docker image
+      - name: Test Docker container
         run: |
-          docker run --rm myapp:${{ github.sha }} python -c "
-          from app import app
-          print('✅ Flask app imports successfully')
-          "
+          docker run --rm myapp:${{ github.sha }} python -c "print('✅ Container works')"
 
-  # Отдельный job для публикации в GHCR (опционально)
+      - name: Smoke test
+        run: |
+          docker run -d --name smoke-test -p 5000:5000 myapp:${{ github.sha }}
+          sleep 3
+          if curl -s http://localhost:5000 | grep -q "Hello"; then
+            echo "✅ Smoke test passed"
+          else
+            echo "❌ Smoke test failed"
+            docker logs smoke-test
+            exit 1
+          fi
+          docker stop smoke-test
+          docker rm smoke-test
+
   publish:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -60,7 +71,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -76,9 +87,8 @@ jobs:
             ghcr.io/${{ github.repository }}/myapp:latest
             ghcr.io/${{ github.repository }}/myapp:${{ github.sha }}
 
-      - name: Success message
+      - name: Show success message
         run: |
-          echo "🚀 Successfully published to GitHub Container Registry!"
+          echo "🚀 Image published to GHCR!"
           echo "📦 ghcr.io/${{ github.repository }}/myapp:latest"
-          echo "🔗 https://github.com/${{ github.repository }}/pkgs/container/myapp"
 EOF
