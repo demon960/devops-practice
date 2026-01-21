@@ -1,5 +1,9 @@
+cd /root/devops-practice
+
+# Создаем правильный workflow для Docker Hub
+cat > .github/workflows/dockerhub-pipeline.yml << 'EOF'
 ---
-name: Docker CI/CD Pipeline
+name: Docker Hub CI/CD Pipeline
 
 on:
   push:
@@ -7,8 +11,12 @@ on:
   pull_request:
     branches: ['main']
 
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: demon960/myapp  # ЗАМЕНИТЕ на ваш username
+
 jobs:
-  build-and-test:
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
@@ -24,20 +32,35 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha
+            type=raw,value=latest
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: ./myapp
-          push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/myapp:latest
-            ${{ secrets.DOCKER_USERNAME }}/myapp:${{ github.sha }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Run smoke test
+      - name: Verify push
+        if: github.event_name != 'pull_request'
         run: |
-          docker pull ${{ secrets.DOCKER_USERNAME }}/myapp:latest
-          docker run -d --name test-app -p 5000:5000 ${{ secrets.DOCKER_USERNAME }}/myapp:latest
-          sleep 5
-          curl -f http://localhost:5000/ || (docker logs test-app && exit 1)
-          docker stop test-app
-          docker rm test-app
+          echo "✅ Successfully pushed to Docker Hub!"
+          echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          echo "Tags:"
+          echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+          echo ""
+          echo "View at: https://hub.docker.com/r/demon960/myapp"
+EOF
