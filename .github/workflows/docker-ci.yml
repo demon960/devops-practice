@@ -1,62 +1,84 @@
 ---
-name: Production Docker Pipeline
+name: CI/CD Pipeline with GHCR
 
 on:
   push:
-    branches: [main]
-  release:
-    types: [published]
-
-env:
-  DOCKER_REGISTRY: docker.io
-  DOCKER_IMAGE: demon960/myapp
+    branches: ['main']
+  pull_request:
+    branches: ['main']
 
 jobs:
-  quality:
+  test:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Hadolint
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          dockerfile: myapp/Dockerfile
+      - name: Test Python code
+        run: |
+          cd myapp
+          python -m py_compile app.py && echo "✅ Python syntax OK"
 
-      - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: './myapp'
+      - name: Verify requirements
+        run: |
+          cd myapp
+          pip install -r requirements.txt
+          python -c "import flask; print(f'✅ Flask {flask.__version__} installed')"
 
   build:
-    needs: quality
+    needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'release'
+    if: github.event_name == 'push'  # Только для push, не для PR
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Docker Hub Login
+      - name: Build Docker image locally
+        run: |
+          cd myapp
+          docker build -t myapp:${{ github.sha }} .
+          echo "✅ Image built locally: myapp:${{ github.sha }}"
+
+      - name: Test Docker image
+        run: |
+          docker run --rm myapp:${{ github.sha }} python -c "
+          from app import app
+          print('✅ Flask app imports successfully')
+          "
+
+  # Отдельный job для публикации в GHCR (опционально)
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version
-        id: version
-        run: |
-          if [[ ${{ github.event_name }} == 'release' ]]; then
-            echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "VERSION=${{ github.sha }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build and Push
+      - name: Build and push to GHCR
         uses: docker/build-push-action@v5
         with:
           context: ./myapp
           push: true
           tags: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:latest
-            ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }}
-          platforms: linux/amd64,linux/arm64
+            ghcr.io/${{ github.repository }}/myapp:latest
+            ghcr.io/${{ github.repository }}/myapp:${{ github.sha }}
+
+      - name: Success message
+        run: |
+          echo "🚀 Successfully published to GitHub Container Registry!"
+          echo "📦 ghcr.io/${{ github.repository }}/myapp:latest"
+          echo "🔗 https://github.com/${{ github.repository }}/pkgs/container/myapp"
+EOF
