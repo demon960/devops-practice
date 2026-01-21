@@ -91,4 +91,4 @@ jobs:
         run: |
           echo "🚀 Image published to GHCR!"
           echo "📦 ghcr.io/${{ github.repository }}/myapp:latest"
-EOF
+
